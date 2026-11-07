@@ -67,3 +67,7 @@ API Key 只保存在你本机浏览器里（`chrome.storage.local`），插件�
 | `content.js` | 按钮、面板、自动浏览、草稿、自动点赞 |
 | `content.css` | 样式（跟随系统深色模式） |
 | `options.html/js` | 设置页 |
+
+## 许可证
+
+[MIT](LICENSE)
