@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>X Reply Copilot 设置</title>
+  <style>
+    body { font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 640px; margin: 32px auto; padding: 0 16px; color: #0f1419; background: #fff; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 15px; margin-top: 28px; border-bottom: 1px solid #eff3f4; padding-bottom: 4px; }
+    label { display: block; margin-top: 14px; font-weight: 600; }
+    small { display: block; color: #536471; font-weight: 400; }
+    input[type=text], input[type=password], input[type=number], select, textarea { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px; border: 1px solid #cfd9de; border-radius: 8px; font: inherit; }
+    textarea { min-height: 80px; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    button { margin-top: 20px; margin-right: 8px; padding: 8px 18px; border: none; border-radius: 999px; background: rgb(29,155,240); color: #fff; font: inherit; cursor: pointer; }
+    button.secondary { background: #eff3f4; color: #0f1419; }
+    #msg { margin-left: 8px; color: #536471; }
+    #stats { color: #536471; }
+    #errLog { max-height: 320px; overflow-y: auto; border: 1px solid #eff3f4; border-radius: 8px; }
+    .err { padding: 8px 10px; border-bottom: 1px solid #eff3f4; font-size: 13px; }
+    .err:last-child { border-bottom: none; }
+    .err-head { display: flex; gap: 8px; color: #536471; font-size: 12px; }
+    .err-kind { padding: 0 6px; border-radius: 4px; background: #eff3f4; }
+    .err-msg { color: #f4212e; margin: 2px 0; }
+    .err-snip { color: #536471; font-size: 12px; word-break: break-all; }
+    .err-empty { padding: 10px; color: #536471; }
+  </style>
+</head>
+<body>
+  <h1>X Reply Copilot 设置</h1>
+
+  <h2>模型</h2>
+  <label>DeepSeek API Key
+    <small>在 platform.deepseek.com 获取，仅保存在本机浏览器</small>
+    <input type="password" id="apiKey" placeholder="sk-..." />
+  </label>
+  <div class="row">
+    <div>
+      <label>模型
+        <select id="model">
+          <option value="deepseek-chat">deepseek-chat（推荐，省 token）</option>
+          <option value="deepseek-reasoner">deepseek-reasoner（推理，token 多）</option>
+        </select>
+      </label>
+    </div>
+    <div>
+      <label>Temperature
+        <input type="number" id="temperature" min="0" max="2" step="0.1" />
+      </label>
+    </div>
+    <div>
+      <label>回复最大字数
+        <input type="number" id="maxLen" min="5" max="500" />
+      </label>
+    </div>
+  </div>
+  <label>人设 / 回复风格
+    <small>作为 system prompt 发送，越短越省 token</small>
+    <textarea id="persona"></textarea>
+  </label>
+
+  <h2>自动浏览</h2>
+  <label>关注关键词
+    <small>逗号分隔；只为包含这些词的帖子生成草稿，留空表示全部</small>
+    <input type="text" id="keywords" placeholder="AI, 创业, Rust" />
+  </label>
+  <div class="row">
+    <div>
+      <label>滚动速度（像素/帧）
+        <input type="number" id="scrollSpeed" min="1" max="20" />
+      </label>
+    </div>
+    <div>
+      <label>草稿上限（不停止时）
+        <small>只在「草稿满几条停止」为 0 时生效</small>
+        <input type="number" id="maxDrafts" min="1" max="200" />
+      </label>
+    </div>
+    <div>
+      <label>草稿满几条停止浏览
+        <small>0 = 不停止</small>
+        <input type="number" id="stopAtDrafts" min="0" max="200" />
+      </label>
+    </div>
+  </div>
+  <label><input type="checkbox" id="autoDraft" /> 浏览时自动生成草稿</label>
+
+  <h2>发送</h2>
+  <div class="row">
+    <div>
+      <label>每日回复上限
+        <input type="number" id="dailyLimit" min="1" max="2000" />
+      </label>
+    </div>
+    <div>
+      <label>批量间隔最少（秒）
+        <input type="number" id="batchMin" min="5" max="3600" />
+      </label>
+    </div>
+    <div>
+      <label>批量间隔最多（秒）
+        <input type="number" id="batchMax" min="5" max="3600" />
+      </label>
+    </div>
+  </div>
+  <label><input type="checkbox" id="autoLike" /> 回复成功后自动给原帖点赞（已赞过的不会重复点）</label>
+  <p id="stats"></p>
+
+  <h2>最近发送错误</h2>
+  <div id="errLog"></div>
+  <button id="clearErr" class="secondary">清空错误记录</button>
+  <br />
+
+  <button id="save">保存</button>
+  <button id="test" class="secondary">测试 DeepSeek</button>
+  <button id="clearReplied" class="secondary">清空已回复记录</button>
+  <span id="msg"></span>
+
+  <script src="defaults.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
