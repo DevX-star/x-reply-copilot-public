@@ -1,3 +1,5 @@
+![X Reply Copilot](assets/cover.jpg)
+
 # X Reply Copilot
 
 Chrome / Edge 扩展（Manifest V3）：在 X 上自动浏览时间线，用 DeepSeek 生成回复草稿。**每一条回复都要你在电脑上逐条批准后才会发出。**
