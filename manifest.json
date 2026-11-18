@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "X Reply Copilot",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "在 X 上自动浏览时间线，用 DeepSeek 生成回复草稿，由你批准后发送。",
   "permissions": ["storage"],
   "host_permissions": ["https://api.deepseek.com/*"],

@@ -4,25 +4,58 @@
   window.__xrcLoaded = true;
 
   // X 改版时只需要改这里
+  // 2026-11 起 X 换了新版页面（没有 data-testid，回复框是 textarea），这里同时兼容新旧两版
   const SEL = {
-    tweet: 'article[data-testid="tweet"]',
-    text: '[data-testid="tweetText"]',
+    tweet: 'article',
+    text: '[data-testid="tweetText"], div[lang]',
     user: '[data-testid="User-Name"]',
-    timeLink: 'a[href*="/status/"] time',
     quote: 'div[role="link"]',
     actionBar: '[role="group"]',
-    replyBtn: '[data-testid="reply"]',
+    replyBtn: '[data-testid="reply"], a[href*="/compose/post?in_reply_to="]',
     dialog: '[role="dialog"]',
-    editor: '[data-testid="tweetTextarea_0"]',
-    likeBtn: '[data-testid="like"]', // 未点赞时的爱心（已点赞是 data-testid="unlike"）
-    unlikeBtn: '[data-testid="unlike"]',
-    sendBtn: '[data-testid="tweetButton"]', // 弹窗里的发送按钮
-    inlineSendBtn: '[data-testid="tweetButtonInline"]', // 原帖页面下方回复框的按钮
-    photo: '[data-testid="tweetPhoto"] img',
-    video: '[data-testid="videoPlayer"], [data-testid="videoComponent"]',
+    editor: '[data-testid="tweetTextarea_0"], textarea',
+    likeBtn: '[data-testid="like"], [data-testid="unlike"]',
+    photo: '[data-testid="tweetPhoto"] img, a[href*="/photo/"] img',
+    video: '[data-testid="videoPlayer"], [data-testid="videoComponent"], video',
     card: '[data-testid="card.wrapper"]',
-    profileLink: '[data-testid="AppTabBar_Profile_Link"]',
+    profileLink: '[data-testid="AppTabBar_Profile_Link"], nav a[aria-label="个人资料"], nav a[aria-label="Profile"]',
+    toast: '[data-testid="toast"], [role="alert"]',
   };
+  const SEND_TEXT = /^(回复|回覆|發佈|发布|Reply|Post)$/i;
+  const isSendBtn = (b) =>
+    !!b && (/^tweetButton(Inline)?$/.test(b.getAttribute('data-testid') || '') || (b.tagName === 'BUTTON' && SEND_TEXT.test(b.innerText.trim())));
+  const btnEnabled = (b) => !!b && !b.disabled && b.getAttribute('aria-disabled') !== 'true';
+  // 回复框：旧版 Draft.js 编辑器 / 新版 textarea（优先找写着「回复」的那个）
+  function findEditor(root = document) {
+    const old = root.querySelector('[data-testid="tweetTextarea_0"]');
+    if (old) return old;
+    const tas = [...root.querySelectorAll('textarea')];
+    return tas.find((t) => /回复|回覆|reply/i.test(`${t.placeholder} ${t.getAttribute('aria-label') || ''}`)) || (root === document ? null : tas[0]) || null;
+  }
+  // 回复框旁边的发送按钮：从回复框往上找最近的「回复」按钮
+  function findSendBtn(box) {
+    for (let p = box?.parentElement, i = 0; p && i < 10; p = p.parentElement, i++) {
+      const b = [...p.querySelectorAll('button')].find(isSendBtn);
+      if (b) return b;
+    }
+    return null;
+  }
+  const boxText = (box) => (box?.tagName === 'TEXTAREA' ? box.value : box?.innerText || '');
+  // 帖子自己的链接：/用户名/status/数字（旧版在 <time> 外层，新版是「1小时」那个链接）
+  function statusLink(article) {
+    const t = article.querySelector('a[href*="/status/"] time')?.closest('a');
+    if (t) return t;
+    return [...article.querySelectorAll('a[href*="/status/"]')].find((a) => /^\/\w+\/status\/\d+\/?$/.test(a.getAttribute('href') || '')) || null;
+  }
+  function likeButton(article) {
+    return (
+      article.querySelector(SEL.likeBtn) ||
+      [...article.querySelectorAll(`${SEL.actionBar} button`)].find((b) => /点赞|喜欢|讚|like/i.test(b.getAttribute('aria-label') || '')) ||
+      null
+    );
+  }
+  const isLiked = (btn) => btn?.getAttribute('data-testid') === 'unlike' || btn?.getAttribute('aria-pressed') === 'true';
+
 
   let settings = { ...self.XRC_DEFAULTS };
   let replied = {}; // tweetId -> 时间戳
@@ -43,6 +76,16 @@
   const MAX_CONSECUTIVE_FAILS = 5; // 连续失败这么多条就暂停整个队列
   const RATE_LIMIT_PAUSE = 10 * 60 * 1000; // X 限频时队列暂停多久
   const todayCount = () => (daily.date === today() ? daily.count : 0);
+
+  async function waitForFn(fn, timeout = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const el = fn();
+      if (el) return el;
+      await sleep(100);
+    }
+    return null;
+  }
 
   async function waitFor(selector, timeout = 5000, root = document) {
     const start = Date.now();
@@ -120,6 +163,16 @@
   async function insertText(box, text) {
     box.focus();
     await sleep(50);
+    if (box.tagName === 'TEXTAREA') {
+      // 新版：普通 textarea，用 insertText 才能让 React 收到输入
+      document.execCommand('insertText', false, text);
+      if (box.value !== text) {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, text);
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      await sleep(150);
+      return;
+    }
     // 用 execCommand 会被浏览器和 Draft.js 各插一次，所以模拟粘贴
     const dt = new DataTransfer();
     dt.setData('text/plain', text);
@@ -135,13 +188,12 @@
     if (!autoLike || !id) return false;
     await sleep(800 + Math.random() * 1200); // 别跟回复同一瞬间
     const article = findArticleById(id);
-    if (!article || article.querySelector(SEL.unlikeBtn)) return false;
-    const btn = article.querySelector(SEL.likeBtn);
-    if (!btn) return false;
-    btn.click();
+    const first = article && likeButton(article);
+    if (!first || isLiked(first)) return false;
+    first.click();
     for (let i = 0; i < 10; i++) {
       await sleep(300);
-      if (article.querySelector(SEL.unlikeBtn)) return true;
+      if (isLiked(likeButton(article))) return true;
     }
     return false;
   }
@@ -152,8 +204,8 @@
   document.addEventListener(
     'click',
     (e) => {
-      const b = e.target.closest?.(SEL.sendBtn);
-      if (b && pendingValid() && b.getAttribute('aria-disabled') !== 'true') {
+      const b = e.target.closest?.('button');
+      if (isSendBtn(b) && pendingValid() && b.closest(SEL.dialog) && btnEnabled(b)) {
         markReplied(pending.id);
         likeAfterReply(pending.id);
         pending = null;
@@ -220,7 +272,7 @@
     if (!focal) return failWithHint('原帖没加载出来');
 
     // 作者编辑过帖子：旧版本下面没有回复框，跳到「查看最新帖子」再回复
-    let box = await waitFor(SEL.editor, 3000);
+    let box = await waitForFn(() => findEditor(), 3000);
     if (!box) {
       const latest = [...document.querySelectorAll('a[href*="/status/"]')].find((a) =>
         /查看最新|最新帖子|最新版本|latest post|latest version|view the latest/i.test(a.innerText)
@@ -234,16 +286,16 @@
         }
       }
       // 原帖下方的回复框（作者限制回复时不会出现）
-      box = await waitFor(SEL.editor, 8000);
+      box = await waitForFn(() => findEditor(), 8000);
     }
-    if (!box || !document.querySelector(SEL.inlineSendBtn)) return failWithHint('原帖下方没有回复框', 'fatal');
+    if (!box || !findSendBtn(box)) return failWithHint('原帖下方没有回复框', 'fatal');
     box.click();
     await sleep(300);
     await insertText(box, job.text);
 
     const enabledBtn = () => {
-      const b = document.querySelector(SEL.inlineSendBtn);
-      return b && b.getAttribute('aria-disabled') !== 'true' ? b : null;
+      const b = findSendBtn(box);
+      return btnEnabled(b) ? b : null;
     };
     const waitEnabled = async (ms) => {
       const t = Date.now();
@@ -259,7 +311,8 @@
     if (!btn) {
       // 编辑器没认到输入 → 清空重新粘贴一次
       box.focus();
-      document.execCommand('selectAll', false);
+      if (box.tagName === 'TEXTAREA') box.select();
+      else document.execCommand('selectAll', false);
       document.execCommand('delete', false);
       await sleep(200);
       await insertText(box, job.text);
@@ -268,8 +321,8 @@
     if (!btn && document.hidden) return fail('发送窗口被其他窗口挡住了');
     if (!btn) return failWithHint('回复按钮是灰色的');
     // 发之前确认框里就是这条草稿，避免重复粘贴之类的问题
-    const typed = box.innerText.replace(/\s+/g, '');
-    if (typed !== job.text.replace(/\s+/g, '')) return fail(`回复框里的内容不对（${clip(box.innerText.trim(), 40)}），已取消`);
+    const typed = boxText(box).replace(/\s+/g, '');
+    if (typed !== job.text.replace(/\s+/g, '')) return fail(`回复框里的内容不对（${clip(boxText(box).trim(), 40)}），已取消`);
 
     // 回复的是新版本时，把新 ID 也记为已回复
     // 发送窗口在 done 之后会被清空，所以先点赞再报告结果
@@ -283,14 +336,14 @@
     while (Date.now() - t1 < 12000) {
       await sleep(300);
       // X 的提示条既可能是「已发送」，也可能是报错
-      const toastText = document.querySelector('[data-testid="toast"]')?.innerText?.trim() || '';
+      const toastText = document.querySelector(SEL.toast)?.innerText?.trim() || '';
       if (toastText) {
         if (/sent|已发送|发送成功|已發送/i.test(toastText)) return success();
         return fail(`X 提示：${clip(toastText, 80)}`, classify(toastText).kind);
       }
       // 发送成功后回复框会被清空
-      const ed = document.querySelector(SEL.editor);
-      if (!ed || !ed.innerText.trim()) return success();
+      const ed = findEditor();
+      if (!ed || !boxText(ed).trim()) return success();
     }
     success({ uncertain: true });
   }
@@ -340,16 +393,24 @@
 
   // ---------- 帖子解析（只取必要信息，控制 token） ----------
   function getTweetId(article) {
-    return article.querySelector(SEL.timeLink)?.closest('a')?.href.match(/status\/(\d+)/)?.[1] || '';
+    return statusLink(article)?.href.match(/status\/(\d+)/)?.[1] || '';
   }
 
   function getTweetData(article) {
-    const texts = [...article.querySelectorAll(SEL.text)];
-    const main = texts.find((t) => !t.closest(SEL.quote));
-    const quoteEl = texts.find((t) => t.closest(SEL.quote));
-    const handle = (article.querySelector(SEL.user)?.innerText || '').match(/@(\w+)/)?.[1] || '';
-    const url = article.querySelector(SEL.timeLink)?.closest('a')?.href || '';
-    const photos = [...article.querySelectorAll(SEL.photo)].filter((i) => !i.closest(SEL.quote));
+    // 新版正文本身也在 role=link 里，所以按「是不是和正文同一个容器」区分引用帖
+    const texts = [...article.querySelectorAll(SEL.text)].filter(
+      (t) => !t.parentElement?.closest(SEL.text) && !/^(显示更多|顯示更多|Show more)$/i.test(t.innerText.trim())
+    );
+    const main = texts[0];
+    const mainBox = main?.closest(SEL.quote) || null;
+    const quoteEl = texts.find((t, i) => i > 0 && t.closest(SEL.quote) && t.closest(SEL.quote) !== mainBox);
+    const handle =
+      (article.querySelector(SEL.user)?.innerText || '').match(/@(\w+)/)?.[1] ||
+      [...article.querySelectorAll('a[href^="/"]')].map((a) => a.innerText.trim()).find((t) => /^@\w+$/.test(t))?.slice(1) ||
+      '';
+    const url = statusLink(article)?.href || '';
+    const quoteBox = quoteEl?.closest(SEL.quote);
+    const photos = [...article.querySelectorAll(SEL.photo)].filter((i) => !(quoteBox && quoteBox.contains(i)));
     const alts = photos.map((i) => i.alt).filter((a) => a && !/^(image|图像|图片)$/i.test(a));
     const media = [];
     if (photos.length) media.push(alts.length ? `图片:${clip(alts.join('；'), 120)}` : `${photos.length}张图片`);
@@ -379,7 +440,7 @@
   async function fillReply(article, text, id) {
     article.querySelector(SEL.replyBtn)?.click();
     const dialog = await waitFor(SEL.dialog);
-    const box = dialog && (await waitFor(SEL.editor, 5000, dialog));
+    const box = dialog && (await waitForFn(() => findEditor(dialog), 5000));
     if (!box) {
       await navigator.clipboard.writeText(text).catch(() => {});
       toast('未找到回复框，草稿已复制到剪贴板');
@@ -496,6 +557,13 @@
   // status：pending 待决定 / queued 已批准排队中 / sending 发送中 / sent 已发送 / ignored 已忽略
   const drafts = new Map(); // id -> { tweet, card, ta, chk, statusEl, approved, status, ... }
   const seen = new Set();
+  // 没生成草稿的原因统计，显示在面板上，方便看出为什么「只滚不生成」
+  const SKIP_LABELS = { replied: '已回复过', mine: '自己的帖子', short: '少于15字', ad: '广告', keyword: '不含关键词' };
+  const skips = { replied: 0, mine: 0, short: 0, ad: 0, keyword: 0 };
+  let genOk = 0;
+  let genFail = 0;
+  let lastGenError = '';
+  let stopReason = ''; // 最近一次自动停止浏览的原因
   const queue = []; // 等待生成草稿的帖子
   const sendQueue = []; // 等待发送的草稿
   const openDrafts = () => [...drafts.values()].filter((d) => d.status === 'pending' || d.status === 'queued');
@@ -515,7 +583,17 @@
     if (queue.length) parts.push(`生成排队 ${queue.length}`);
     if (sendQueue.length) parts.push(`待发送 ${sendQueue.length}`);
     if (statusExtra) parts.push(statusExtra);
-    $('.xrc-status').textContent = parts.join(' · ');
+    const lines = [parts.join(' · ')];
+    const skipText = Object.keys(skips)
+      .filter((k) => skips[k])
+      .map((k) => `${SKIP_LABELS[k]} ${skips[k]}`)
+      .join(' · ');
+    if (skipText) lines.push(`跳过：${skipText}`);
+    if (genOk || genFail) lines.push(`生成：成功 ${genOk} · 失败 ${genFail}${lastGenError ? `（最近：${clip(lastGenError, 40)}）` : ''}`);
+    const warn = diagnose();
+    if (warn) lines.push(`⚠️ ${warn}`);
+    else if (!browsing && stopReason) lines.push(`⏹ ${stopReason}`);
+    $('.xrc-status').textContent = lines.join('\n');
     if (document.activeElement !== stopAtInput) stopAtInput.value = stopAt();
     if (document.activeElement !== maxLenInput) maxLenInput.value = settings.maxLen;
     const n = pendingDrafts().filter((d) => d.approved).length;
@@ -841,18 +919,40 @@
     (entries) => {
       for (const e of entries) {
         if (!e.isIntersecting) continue;
+        if (!browsing) break;
         const id = getTweetId(e.target);
         if (!id || seen.has(id)) continue;
+        // 草稿满了：停下来，而不是继续滚动却什么都不生成（也不把这条记成看过）
+        if (settings.autoDraft && openDrafts().length + queue.length >= draftCap()) {
+          autoStop(`草稿已满 ${draftCap()} 条，已停止浏览。处理或清空草稿后再继续`);
+          break;
+        }
         seen.add(id);
         // 本地先过滤，省 token
-        if (replied[id] || drafts.has(id)) continue;
+        if (replied[id] || drafts.has(id)) {
+          if (replied[id]) skips.replied++;
+          continue;
+        }
         const tweet = getTweetData(e.target);
         const me = myHandle();
-        if (me && tweet.handle.toLowerCase() === me) continue;
-        if (charLen(tweet.text) < 15 || isAd(e.target)) continue;
-        if (!matchesKeywords(`${tweet.text} ${tweet.quote}`)) continue;
+        if (me && tweet.handle.toLowerCase() === me) {
+          skips.mine++;
+          continue;
+        }
+        if (isAd(e.target)) {
+          skips.ad++;
+          continue;
+        }
+        if (charLen(tweet.text) < 15) {
+          skips.short++;
+          continue;
+        }
+        if (!matchesKeywords(`${tweet.text} ${tweet.quote}`)) {
+          skips.keyword++;
+          continue;
+        }
         pauseUntil = Date.now() + 1500 + Math.random() * 2500; // 停下来"读"一会
-        if (settings.autoDraft && openDrafts().length + queue.length < draftCap()) {
+        if (settings.autoDraft) {
           queue.push(tweet);
           processQueue();
         }
@@ -871,12 +971,19 @@
       if (replied[tweet.id] || drafts.has(tweet.id)) continue;
       try {
         addDraft(tweet, await generate(tweet));
+        genOk++;
+        lastGenError = '';
         checkStopAt();
       } catch (err) {
-        toast(err.message);
+        genFail++;
+        lastGenError = err.message;
+        toast(`生成失败：${err.message}`, 6000);
         if (/API Key|余额|401|402/.test(err.message)) {
           queue.length = 0;
-          stopBrowsing();
+          autoStop(`DeepSeek 不可用（${clip(err.message, 40)}），已停止浏览。请到设置页检查 Key 和余额`);
+        } else if (genFail >= 3 && genOk === 0) {
+          queue.length = 0;
+          autoStop(`连续生成失败 ${genFail} 次（${clip(err.message, 40)}），已停止浏览。请到设置页点「测试 DeepSeek」`);
         }
       }
     }
@@ -889,11 +996,26 @@
   // 设了「草稿满 N 条停止」就以它为准；设为 0 时才用设置页的「草稿上限」
   const draftCap = () => (stopAt() > 0 ? stopAt() : Number(settings.maxDrafts) || 20);
 
+  function autoStop(reason) {
+    if (!browsing) return;
+    stopBrowsing();
+    stopReason = reason;
+    notify(`🛑 ${reason}`);
+    updateStatus();
+  }
+
   function checkStopAt() {
-    if (browsing && stopAt() > 0 && openDrafts().length >= stopAt()) {
-      stopBrowsing();
-      notify(`🛑 草稿已满 ${stopAt()} 条，已自动停止浏览`);
-    }
+    if (browsing && openDrafts().length >= draftCap()) autoStop(`草稿已满 ${draftCap()} 条，已自动停止浏览`);
+  }
+
+  // 根据统计猜「只滚不生成」的原因
+  function diagnose() {
+    if (!settings.autoDraft) return '设置里「浏览时自动生成草稿」已关闭，浏览只会滚动';
+    const n = seen.size;
+    if (n < 20 || genOk || queue.length) return '';
+    if (skips.short >= n * 0.9) return '几乎所有帖子都读不到正文，可能是 X 改版了（选择器需要更新）';
+    if (skips.keyword >= n * 0.7) return `看了 ${n} 条，大多不含关键词，可以放宽或清空关键词`;
+    return '';
   }
 
   // 返回空字符串表示成功，否则返回原因
@@ -901,13 +1023,15 @@
     let err = '';
     if (dead) err = '扩展已失效，请刷新页面';
     else if (browsing) err = '已经在浏览中';
-    else if (stopAt() > 0 && openDrafts().length >= stopAt())
-      err = `已有 ${openDrafts().length} 条待处理草稿（停止阈值 ${stopAt()}），请先处理或调高阈值`;
+    else if (settings.autoDraft && openDrafts().length >= draftCap())
+      err = `已有 ${openDrafts().length} 条待处理草稿（上限 ${draftCap()}），请先处理或调高阈值`;
     if (err) {
       toast(err);
       return err;
     }
     browsing = true;
+    stopReason = '';
+    if (!settings.autoDraft) toast('「浏览时自动生成草稿」已关闭，只会滚动，不会生成草稿（在设置页打开）', 6000);
     $('.xrc-toggle').textContent = '⏸ 暂停浏览';
     document.querySelectorAll(SEL.tweet).forEach((a) => io.observe(a));
     scrollTimer = setInterval(() => {
