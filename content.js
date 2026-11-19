@@ -514,6 +514,7 @@
     <div class="xrc-head">
       <span class="xrc-title">Reply Copilot</span>
       <span>
+        <button class="xrc-win" title="在独立小窗口里运行，切换标签页也不受影响">🪟</button>
         <button class="xrc-min" title="收起/展开">–</button>
       </span>
     </div>
@@ -535,6 +536,23 @@
   const $ = (s) => panel.querySelector(s);
   $('.xrc-min').onclick = () => panel.classList.toggle('xrc-collapsed');
 
+  // 独立工作窗口：后台标签页不会渲染 X 的时间线，所以放到单独的小窗口里跑
+  let isWorkWindow = false;
+  $('.xrc-win').onclick = () => {
+    if (isWorkWindow) return toast('当前就是工作窗口');
+    send({ type: 'openWorkWindow' })
+      .then((r) => toast(r?.existed ? '工作窗口已经开着，已切换过去' : '已打开工作窗口，在那个窗口里开始浏览即可'))
+      .catch((err) => toast(err.message));
+  };
+  send({ type: 'isWorkTab' })
+    .then((r) => {
+      isWorkWindow = r.work;
+      if (isWorkWindow) {
+        $('.xrc-title').textContent = 'Reply Copilot · 工作窗口';
+        $('.xrc-win').style.display = 'none';
+      }
+    })
+    .catch(() => {});
   const stopAtInput = $('.xrc-stopat-input');
   stopAtInput.addEventListener('change', () => {
     const n = Math.min(200, Math.max(0, Math.round(Number(stopAtInput.value) || 0)));
@@ -1061,7 +1079,10 @@
     hiddenTimer = setTimeout(() => {
       if (!document.hidden || !browsing) return;
       // 切回来时能在面板上看到
-      notify('⚠️ X 页面被切到后台，自动浏览已暂停，切回这个标签页即可继续');
+      const tip = isWorkWindow
+        ? '工作窗口被最小化或完全遮住了，自动浏览已暂停，露出一部分即可恢复'
+        : 'X 页面被切到后台，自动浏览已暂停。点面板上的 🪟 用独立窗口运行就不受影响';
+      notify(`⚠️ ${tip}`);
     }, 15000);
   });
 

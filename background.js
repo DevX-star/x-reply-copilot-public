@@ -176,8 +176,41 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   }
 });
 
+// ---------- 工作窗口 ----------
+// 后台标签页里浏览器不渲染页面，X 的时间线不会加载；独立的小窗口只要没被最小化/完全遮住就能正常跑
+async function getWorkTab() {
+  const { workTabId = null } = await chrome.storage.session.get('workTabId');
+  if (workTabId == null) return null;
+  try {
+    await chrome.tabs.get(workTabId);
+    return workTabId;
+  } catch {
+    await chrome.storage.session.remove('workTabId');
+    return null;
+  }
+}
+
+async function openWorkWindow() {
+  const existing = await getWorkTab();
+  if (existing != null) {
+    const tab = await chrome.tabs.get(existing);
+    await chrome.windows.update(tab.windowId, { focused: true, state: 'normal' });
+    return { ok: true, existed: true };
+  }
+  const win = await chrome.windows.create({ url: 'https://x.com/home', type: 'popup', width: 560, height: 900, focused: true });
+  await chrome.storage.session.set({ workTabId: win.tabs[0].id });
+  return { ok: true };
+}
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const { workTabId } = await chrome.storage.session.get('workTabId');
+  if (workTabId === tabId) await chrome.storage.session.remove('workTabId');
+});
+
 // ---------- 消息 ----------
 const handlers = {
+  openWorkWindow: () => openWorkWindow(),
+  isWorkTab: async (_msg, sender) => ({ ok: true, work: (await getWorkTab()) === sender.tab?.id }),
   generate: (msg) => generateReply(msg.tweet).then((text) => ({ ok: true, text })),
   test: async () => {
     const s = await getSettings();
